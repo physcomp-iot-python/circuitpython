@@ -134,6 +134,7 @@ typedef long mp_off_t;
 #include "mpconfigboard.h"
 
 // extra built in modules to add to the list of known ones
+extern const struct _mp_obj_module_t physcomp_module;
 extern const struct _mp_obj_module_t microcontroller_module;
 extern const struct _mp_obj_module_t bitbangio_module;
 extern const struct _mp_obj_module_t audioio_module;
@@ -176,6 +177,7 @@ extern const struct _mp_obj_module_t usb_hid_module;
     #define CIRCUITPY_GAMEPAD_TICKS 0x1f
 
     #define EXTRA_BUILTIN_MODULES \
+        { MP_OBJ_NEW_QSTR(MP_QSTR_physcomp), (mp_obj_t)&physcomp_module }, \
         { MP_OBJ_NEW_QSTR(MP_QSTR_audioio), (mp_obj_t)&audioio_module }, \
         { MP_OBJ_NEW_QSTR(MP_QSTR_audiobusio), (mp_obj_t)&audiobusio_module }, \
         { MP_OBJ_NEW_QSTR(MP_QSTR_gamepad),(mp_obj_t)&gamepad_module }, \
