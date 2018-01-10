@@ -123,11 +123,51 @@ STATIC mp_obj_t physcomp_med5filt(mp_obj_t src, mp_obj_t dest){
 
 MP_DEFINE_CONST_FUN_OBJ_2(physcomp_med5filt_obj, physcomp_med5filt);
 
+STATIC mp_obj_t physcomp_convert_dtypeHf(mp_obj_t src, mp_obj_t dest){
+    mp_buffer_info_t src_bufinfo;
+    mp_buffer_info_t dest_bufinfo;
+    if (mp_get_buffer(src,   &src_bufinfo, MP_BUFFER_READ) && 
+        mp_get_buffer(dest, &dest_bufinfo,  MP_BUFFER_WRITE)
+       ) {
+        //compute number of elements in input and output buffers
+        size_t input_length  = mp_binary_get_size('@', src_bufinfo.typecode, NULL);
+        size_t output_length = mp_binary_get_size('@', dest_bufinfo.typecode, NULL);
+        if (output_length < input_length) {
+            mp_raise_ValueError("dest buffer length is smaller than src length.");
+        }
+        if (src_bufinfo.typecode != 'H') {
+            mp_raise_ValueError("src buffer must be an array of type 'H'");
+        }
+        if (dest_bufinfo.typecode != 'f') {
+            mp_raise_ValueError("dest buffer must be an array of type 'f'");
+        }
+        //create a typed pointer for access into these buffers
+        uint16_t*  input_buffer  = (uint16_t*) src_bufinfo.buf;
+        float*     output_buffer = (float*) dest_bufinfo.buf;
+       
+        //compute sum of input
+        uint32_t sum = 0;
+        for(size_t i=0; i < input_length; i++){
+            sum += input_buffer[i];
+        }
+        float mean = ((float)sum)/input_length;
+        //convert to floating point with DC component removed
+        for(size_t i=0; i < input_length; i++){
+            output_buffer[i] = ((float) input_buffer[i] - mean);
+        }
+        return mp_const_true;
+    }
+    return mp_const_false;
+}
+
+MP_DEFINE_CONST_FUN_OBJ_2(physcomp_convert_dtypeHf_obj, physcomp_convert_dtypeHf);
+
 
 STATIC const mp_rom_map_elem_t physcomp_module_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_physcomp) },
     { MP_ROM_QSTR(MP_QSTR_test), MP_ROM_PTR(&physcomp_test_obj) },
     { MP_ROM_QSTR(MP_QSTR_med5filt), MP_ROM_PTR(&physcomp_med5filt_obj) },
+    { MP_ROM_QSTR(MP_QSTR_convert_dtypeHf), MP_ROM_PTR(&physcomp_convert_dtypeHf_obj) },
 };
 
 STATIC MP_DEFINE_CONST_DICT(physcomp_module_globals, physcomp_module_globals_table);
