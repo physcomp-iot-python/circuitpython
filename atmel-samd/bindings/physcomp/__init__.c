@@ -230,31 +230,179 @@ STATIC mp_obj_t physcomp_filter_IIRord1(mp_uint_t n_args, const mp_obj_t *args){
 STATIC MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(physcomp_filter_IIRord1_obj, 8, 8, physcomp_filter_IIRord1);
 
 
-STATIC mp_obj_t physcomp_array_rms(mp_obj_t src){
+STATIC mp_obj_t physcomp_raw_rms(mp_obj_t src){
     mp_buffer_info_t src_bufinfo;
     if (mp_get_buffer(src,   &src_bufinfo, MP_BUFFER_READ)){
         //compute number of elements in input and output buffers
         size_t input_length  = src_bufinfo.len/mp_binary_get_size('@', src_bufinfo.typecode, NULL);
-        if (src_bufinfo.typecode != 'f') {
-            mp_raise_ValueError("src buffer must be an array of type 'f'");
+        if (src_bufinfo.typecode != 'H') {
+            mp_raise_ValueError("src buffer must be an array of type 'H'");
         }
         //create a typed pointer for access into these buffers
-        float*  input_buffer  = (float*) src_bufinfo.buf;
-    
-        //compute sum of input squares
-        float sum = 0;
+        uint16_t*  input_buffer  = (uint16_t*) src_bufinfo.buf;
+        
+        //compute mean over all data
+        uint32_t sum = 0;
         for(size_t i=0; i < input_length; i++){
-            float val = input_buffer[i];
+            sum += input_buffer[i];
+        }
+        int32_t mean = sum/input_length;
+        sum = 0;
+        //compute sum of input squares*/
+        for(size_t i=0; i < input_length; i++){
+            int32_t val = input_buffer[i] - mean;
             sum += val*val;
         }
-        return mp_obj_new_float(sqrt(sum));
+        return mp_obj_new_float(sqrt(((float) sum)/input_length));
     } else{
         mp_raise_ValueError("src must be array.array type");
     }
     return mp_const_none;
 }
 
-MP_DEFINE_CONST_FUN_OBJ_1(physcomp_array_rms_obj, physcomp_array_rms);
+MP_DEFINE_CONST_FUN_OBJ_1(physcomp_raw_rms_obj, physcomp_raw_rms);
+
+STATIC mp_obj_t physcomp_filtered_rms(mp_uint_t n_args, const mp_obj_t *args){
+    //parse the argument list
+    (void)n_args; // unused, we know it's 7
+    mp_obj_t src  = args[0]; //the source array
+    //get the filter coeffs as C floats
+    float b0 = mp_obj_get_float(args[1]);
+    float b1 = mp_obj_get_float(args[2]);
+    float b2 = mp_obj_get_float(args[3]);
+    float a0 = mp_obj_get_float(args[4]);
+    float a1 = mp_obj_get_float(args[5]);
+    float a2 = mp_obj_get_float(args[6]);
+    
+    mp_buffer_info_t src_bufinfo;
+    if (mp_get_buffer(src,   &src_bufinfo, MP_BUFFER_READ)){
+        //compute number of elements in input and output buffers
+        size_t input_length  = src_bufinfo.len/mp_binary_get_size('@', src_bufinfo.typecode, NULL);
+        if (src_bufinfo.typecode != 'H') {
+            mp_raise_ValueError("src buffer must be an array of type 'f'");
+        }
+        //create a typed pointer for access into these buffers
+        uint16_t*  input_buffer  = (uint16_t*) src_bufinfo.buf;
+        
+        //compute mean over all data VERY IMPORTANT for filter stability!
+        uint32_t sum = 0;
+        for(size_t i=0; i < input_length; i++){
+            sum += input_buffer[i];
+        }
+        float mean = ((float)sum)/input_length;
+        
+        float x_1 = 0.0;
+        float x_2 = 0.0;
+        float y_1 = 0.0;
+        float y_2 = 0.0;
+        float accum = 0.0;
+        //center window of length 5 and scan over input writing to output
+        for(size_t j=2; j < input_length - 2; j++){
+            //median filter removes spike noise
+            uint16_t med = med5uint16(input_buffer[j-2],
+                                      input_buffer[j-1],
+                                      input_buffer[j],
+                                      input_buffer[j+1],
+                                      input_buffer[j+2]);
+            //remove DC component with mean VERY IMPORTANT!
+            float x = med - mean;
+            //perform IIR 1st order filtering
+            // IIR difference equation
+            float y = (b0*x +b1*x_1 + b2*x_2 - a1*y_1 - a2*y_2)/a0;
+            // shift delayed x, y samples
+            x_2 = x_1;
+            x_1 = x;
+            y_2 = y_1;
+            y_1 = y;
+            //accumulate sum of input squares
+            accum += y*y;
+        }
+        //send back the RMS value
+        return mp_obj_new_float(sqrt(accum/(input_length - 4)));
+    } else{
+        mp_raise_ValueError("src must be array.array type");
+    }
+    return mp_const_none;
+}
+
+STATIC MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(physcomp_filtered_rms_obj, 7, 7, physcomp_filtered_rms);
+
+typedef int32_t Fixed16;
+typedef int32_t Fixed32;
+
+#define FRACT_BITS 14
+#define FRACT_BITS_D2 7
+#define FIXED_ONE (1 << FRACT_BITS)
+#define INT2FIXED(x) ((x) << FRACT_BITS)
+#define FLOAT2FIXED(x) ((int)((x) * (1 << FRACT_BITS))) 
+#define FIXED2INT(x) ((x) >> FRACT_BITS)
+#define FIXED2DOUBLE(x) (((double)(x)) / (1 << FRACT_BITS))
+#define MULT(x, y) ( ((x) >> FRACT_BITS_D2) * ((y)>> FRACT_BITS_D2) )
+
+STATIC mp_obj_t physcomp_fast_filtered_rms(mp_uint_t n_args, const mp_obj_t *args){
+    //parse the argument list
+    (void)n_args; // unused, we know it's 6
+    mp_obj_t src  = args[0]; //the source array
+    //get the filter coeffs as C floats
+    Fixed32 b0 = FLOAT2FIXED(mp_obj_get_float(args[1]));
+    Fixed32 b1 = FLOAT2FIXED(mp_obj_get_float(args[2]));
+    Fixed32 b2 = FLOAT2FIXED(mp_obj_get_float(args[3]));
+    Fixed32 a1 = FLOAT2FIXED(mp_obj_get_float(args[4]));
+    Fixed32 a2 = FLOAT2FIXED(mp_obj_get_float(args[5]));
+    
+    mp_buffer_info_t src_bufinfo;
+    if (mp_get_buffer(src,   &src_bufinfo, MP_BUFFER_READ)){
+        //compute number of elements in input and output buffers
+        size_t input_length  = src_bufinfo.len/mp_binary_get_size('@', src_bufinfo.typecode, NULL);
+        if (src_bufinfo.typecode != 'H') {
+            mp_raise_ValueError("src buffer must be an array of type 'H'");
+        }
+        //create a typed pointer for access into these buffers
+        uint16_t*  input_buffer  = (uint16_t*) src_bufinfo.buf;
+        
+        //compute mean over all data VERY IMPORTANT for filter stability!
+        uint32_t sum = 0;
+        for(size_t i=0; i < input_length; i++){
+            sum += input_buffer[i];
+        }
+        Fixed32 mean = FLOAT2FIXED(((double)sum)/input_length);
+        
+        Fixed32 x_1 = 0;
+        Fixed32 x_2 = 0;
+        Fixed32 y_1 = 0;
+        Fixed32 y_2 = 0;
+        uint32_t accum = 0;
+        //center window of length 5 and scan over input writing to output
+        for(size_t j=2; j < input_length - 2; j++){
+            //median filter removes spike noise
+            uint16_t med = med5uint16(input_buffer[j-2],
+                                      input_buffer[j-1],
+                                      input_buffer[j],
+                                      input_buffer[j+1],
+                                      input_buffer[j+2]);
+            //remove DC component with mean 
+            Fixed32 x = INT2FIXED((int32_t)med) - mean;
+            //perform IIR 1st order filtering
+            // IIR difference equation
+            Fixed32 y = MULT(b0,x) + MULT(b1,x_1) + MULT(b2,x_2) - MULT(a1,y_1) - MULT(a2,y_2);
+            // shift delayed x, y samples
+            x_2 = x_1;
+            x_1 = x;
+            y_2 = y_1;
+            y_1 = y;
+            //accumulate sum of input squares, be careful of overflow
+            uint32_t v = FIXED2INT(y);
+            accum += v*v;
+        }
+        //send back the RMS value
+        return mp_obj_new_float(((double) accum)/(input_length - 4));
+    } else{
+        mp_raise_ValueError("src must be array.array type");
+    }
+    return mp_const_none;
+}
+
+STATIC MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(physcomp_fast_filtered_rms_obj, 6, 6, physcomp_fast_filtered_rms);
 
 STATIC const mp_rom_map_elem_t physcomp_module_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_physcomp) },
@@ -262,7 +410,9 @@ STATIC const mp_rom_map_elem_t physcomp_module_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR_med5filt), MP_ROM_PTR(&physcomp_med5filt_obj) },
     { MP_ROM_QSTR(MP_QSTR_convert_dtypeHf), MP_ROM_PTR(&physcomp_convert_dtypeHf_obj) },
     { MP_ROM_QSTR(MP_QSTR_filter_IIRord1), MP_ROM_PTR(&physcomp_filter_IIRord1_obj) },
-    { MP_ROM_QSTR(MP_QSTR_array_rms), MP_ROM_PTR(&physcomp_array_rms_obj) },
+    { MP_ROM_QSTR(MP_QSTR_raw_rms), MP_ROM_PTR(&physcomp_raw_rms_obj) },
+    { MP_ROM_QSTR(MP_QSTR_filtered_rms), MP_ROM_PTR(&physcomp_filtered_rms_obj) },
+    { MP_ROM_QSTR(MP_QSTR_fast_filtered_rms), MP_ROM_PTR(&physcomp_fast_filtered_rms_obj) },
 };
 
 STATIC MP_DEFINE_CONST_DICT(physcomp_module_globals, physcomp_module_globals_table);
