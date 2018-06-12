@@ -214,6 +214,7 @@ SRC_C = \
 	tick.c \
 	$(FLASH_IMPL) \
 	bindings/samd/__init__.c \
+	bindings/physcomp/__init__.c \
 	asf/common/services/sleepmgr/samd/sleepmgr.c \
 	asf/common/services/storage/ctrl_access/ctrl_access.c  \
 	asf/common/services/usb/class/cdc/device/udi_cdc.c \
