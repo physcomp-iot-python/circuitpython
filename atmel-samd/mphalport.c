@@ -153,6 +153,16 @@ int receive_usb(void) {
     return data;
 }
 
+//CWV: added 2018/05/02
+int mp_hal_stdin_rx_count(void){
+    #ifdef USB_REPL
+    return usb_rx_count;
+    #else
+    return 0;
+    #endif
+}
+//end CWV
+
 int mp_hal_stdin_rx_chr(void) {
     for (;;) {
         #ifdef MICROPY_VM_HOOK_LOOP
